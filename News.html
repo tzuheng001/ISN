@@ -173,6 +173,30 @@
             });
         }
 
+        // --- 🎈 新增：處理手機版地圖偏移的共用函數 ---
+        function flyToEvent(lat, lng) {
+            let targetZoom = 5;
+            let targetLatLng = L.latLng(lat, lng);
+
+            // 檢查是否為手機版 (螢幕寬度小於 768px)
+            if (window.innerWidth < 768) {
+                // 先將目標經緯度轉成畫面上的像素座標
+                let point = map.project(targetLatLng, targetZoom);
+                
+                // 💡 偏移調整區：
+                // 地圖「相機焦點」往左上角移動 (減法) -> 畫面上的標記與訊息框就會「往右下方偏移」
+                point.x -= 50; // 負值代表標記往右移 (避開左側)
+                point.y -= 90; // 負值代表標記往下移 (避開左上方狀態框)
+                
+                // 將調整後的像素轉回經緯度
+                targetLatLng = map.unproject(point, targetZoom);
+            }
+
+            // 執行飛行動畫
+            map.flyTo(targetLatLng, targetZoom, { duration: 1.5 });
+        }
+
+
         // --- 4. 處理與渲染新事件 (含連動與歷史歸檔) ---
         function renderNewEvent(eventData) {
             const eventId = eventData.id || `evt_${Date.now()}`;
@@ -187,11 +211,15 @@
             });
 
             const marker = L.marker([lat, lng], { icon: pulseIcon }).addTo(map);
+            
+            // 💡 加入 autoPanPaddingTopLeft，防止地圖打開訊息框時又自動把它拉回死角
             marker.bindPopup(`
                 <strong style="color: #ef4444;">${eventData.type}</strong><br>
                 ${eventData.title}<br>
                 <span style="color:#aaa; font-size:12px;">地點: ${eventData.location}</span>
-            `);
+            `, {
+                autoPanPaddingTopLeft: [10, 100] // 告訴 Leaflet 頂部 100px 是保留區
+            });
 
             // B. 建立側邊列表卡片
             const feedList = document.getElementById('feed-list');
@@ -209,8 +237,7 @@
                     <span class="text-xs font-bold px-2 py-0.5 rounded tech-font ${isHighSeverity ? 'bg-red-900 text-red-300' : 'bg-yellow-900 text-yellow-300'}">
                         ${eventData.type}
                     </span>
-                    <!-- 改成吃資料庫的 created_at -->
-		    <span class="text-[10px] text-gray-400 tech-font">${eventData.created_at ? new Date(eventData.created_at).toLocaleTimeString() : new Date().toLocaleTimeString()}</span>
+                    <span class="text-[10px] text-gray-400 tech-font">${eventData.created_at ? new Date(eventData.created_at).toLocaleTimeString() : new Date().toLocaleTimeString()}</span>
                 </div>
                 <div class="text-sm font-semibold text-blue-200 pointer-events-none block line-clamp-2 mb-1">
                     ${eventData.title}
@@ -228,7 +255,10 @@
             card.addEventListener('click', () => {
                 clearAllHighlights();
                 card.classList.add('active-card');
-                map.flyTo([lat, lng], 5, { duration: 1.5 });
+                
+                // 💡 使用新的偏移函數取代原本的 map.flyTo
+                flyToEvent(lat, lng); 
+                
                 setTimeout(() => { marker.openPopup(); }, 1500);
             });
 
@@ -236,6 +266,9 @@
                 clearAllHighlights();
                 card.classList.add('active-card');
                 card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                
+                // 💡 點擊地圖上的點時，也可以順便套用偏移函數讓它移到最佳觀看位置
+                flyToEvent(lat, lng);
             });
 
             // D. 數量控制與「歷史歸檔」機制
@@ -261,7 +294,9 @@
                 // 點擊歷史紀錄依然可以飛到該國家，只是沒有紅點彈窗了
                 historyCard.addEventListener('click', () => {
                     toggleHistory(false); // 關閉歷史面板
-                    map.flyTo([oldestEvent.lat, oldestEvent.lng], 5, { duration: 1.5 });
+                    
+                    // 💡 同樣使用偏移函數
+                    flyToEvent(oldestEvent.lat, oldestEvent.lng); 
                 });
 
                 historyList.prepend(historyCard); // 放在歷史區最前面
