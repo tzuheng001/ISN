@@ -1,0 +1,213 @@
+import os
+import uuid
+import re
+import time
+from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import feedparser
+import pandas as pd
+import requests
+import google.generativeai as genai
+from pydantic import BaseModel, Field
+# 引入 Supabase 套件
+from supabase import create_client, Client
+
+# ==========================================
+# 1. 基礎配置與時區/時間窗口校正
+# ==========================================
+TZ_TW = timezone(timedelta(hours=8))
+NOW_TW = datetime.now(TZ_TW)
+TODAY_STR = NOW_TW.strftime("%Y-%m-%d")
+YESTERDAY_STR = (NOW_TW - timedelta(days=1)).strftime("%Y-%m-%d")
+
+# 定義 48 小時滑動窗口，避免任何因時差或排程造成的情報盲區
+TIME_WINDOW = timedelta(hours=48)
+
+# 驗證環境變數
+REQUIRED_ENV = ["GEMINI_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
+for env in REQUIRED_ENV:
+    if not os.environ.get(env):
+        raise ValueError(f"環境變數中缺少 {env}，請先設定。")
+
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+
+# 初始化 Supabase 用戶端
+supabase_url = os.environ["SUPABASE_URL"]
+supabase_key = os.environ["SUPABASE_KEY"]
+supabase: Client = create_client(supabase_url, supabase_key)
+
+# ==========================================
+# 2. 18 大權威情資來源註冊表
+# ==========================================
+CTI_REGISTRY = {
+    "BleepingComputer": {"format": "RSS", "url": "https://www.bleepingcomputer.com/feed/"},
+    "SecurityWeek": {"format": "RSS", "url": "https://feeds.feedburner.com/securityweek"},
+    "DarkReading": {"format": "RSS", "url": "https://www.darkreading.com/rss.xml"},
+    "CyberScoop": {"format": "RSS", "url": "https://cyberscoop.com/feed/"},
+    "CybersecurityDive": {"format": "RSS", "url": "https://www.cybersecuritydive.com/feed/"},
+    "MSRC_Blog": {"format": "RSS", "url": "https://msrc.microsoft.com/blog/feed"},
+    "Google_Chrome_Releases": {"format": "RSS", "url": "https://chromereleases.googleblog.com/feeds/posts/default"},
+    "Cisco_Advisories": {"format": "RSS", "url": "https://tools.cisco.com/security/center/rss.x?i=44"},
+    "PaloAlto_Advisories": {"format": "RSS", "url": "https://security.paloaltonetworks.com/rss.xml"},
+    "Fortinet_PSIRT": {"format": "RSS", "url": "https://www.fortinet.com/content/fortinet-blog/us/en/rss-feeds/psirt.rss"},
+    "CISA_KEV": {"format": "CISA_API", "url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"},
+    "Singapore_CSA": {"format": "RSS", "url": "https://www.csa.gov/rss/alerts-and-advisories"},
+    "Taiwan_TWCERT": {"format": "RSS", "url": "https://www.twcert.org.tw/tw/lp-132-1.xml"},
+    "FBI_IC3": {"format": "RSS", "url": "https://www.ic3.gov/Home/RssAlerts"},
+    "Cisco_Talos": {"format": "RSS", "url": "https://blog.talosintelligence.com/rss/"},
+    "Mandiant_Blog": {"format": "RSS", "url": "https://www.mandiant.com/resources/blog/rss.xml"},
+    "TrendMicro_Research": {"format": "RSS", "url": "https://feeds.trendmicro.com/TrendMicroSecurityNews"},
+    "Malwarebytes_Labs": {"format": "RSS", "url": "https://www.malwarebytes.com/blog/feed"},
+    "SentinelOne_Blog": {"format": "RSS", "url": "https://www.sentinelone.com/blog/feed/"},
+    # GitHub API 查詢條件改為大於等於昨天，確保完整覆蓋 48 小時
+    "GitHub_Exploit_Search": {"format": "GITHUB_API", "url": f"https://api.github.com/search/repositories?q=created:%3E={YESTERDAY_STR}+topic:exploit&sort=stars"}
+}
+
+class SecurityEnrichment(BaseModel):
+    threat_type: str = Field(description="威脅類型。例如：DDoS、漏洞、資料外洩、漏洞修補等")
+    severity: str = Field(description="嚴重程度。必須嚴格填入 'High' 或 'Medium' 或 'Normal'")
+    location: str = Field(description="事發地點名稱。例如：台灣, 台北、美國、全球。若無特定則填全球")
+    lat: float = Field(description="該地點的緯度。未知或全球則填 0.0000")
+    lng: float = Field(description="該地點的經度。未知或全球則填 0.0000")
+    Summary: str = Field(description="將原文精煉並翻譯為繁體中文的新聞內容摘要，不超過150字")
+    Suggestion: str = Field(description="站在資安專家角度，針對該事件給出具體、可執行的繁體中文處置或緩解作法建議")
+
+def ai_enrichment_engine(title: str, raw_summary: str) -> SecurityEnrichment:
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    prompt = f"你是一個頂尖的威脅情報分析師。請精確剖析以下資安情資並輸出結構化 JSON。\n【標題】：{title}\n【內容】：{raw_summary}"
+    try:
+        time.sleep(0.5)
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.GenerationConfig(
+                response_mime_type="application/json", response_schema=SecurityEnrichment, temperature=0.1
+            )
+        )
+        return SecurityEnrichment.model_validate_json(response.text)
+    except Exception as e:
+        print(f"  [AI Error] 處理失敗: {e}")
+        return None
+
+def fetch_and_parse(name, config):
+    local_results = []
+    fmt = config["format"]
+    url = config["url"]
+    try:
+        # ---- 1. RSS 串流解析 (引入滑動窗口判斷) ----
+        if fmt == "RSS":
+            feed = feedparser.parse(url)
+            for entry in feed.entries:
+                pub_time = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc).astimezone(TZ_TW) if hasattr(entry, "published_parsed") and entry.published_parsed else NOW_TW
+                
+                # 【核心修正】檢查文章發布時間是否在過去 48 小時的時間窗口內
+                if NOW_TW - pub_time <= TIME_WINDOW:
+                    summary_raw = getattr(entry, "summary", getattr(entry, "description", ""))
+                    clean_content = re.sub('<[^<]+?>', '', summary_raw)[:500]
+                    local_results.append({
+                        "title": entry.title, 
+                        "url": entry.link, 
+                        "raw_content": clean_content, 
+                        "created_at": pub_time.isoformat()
+                    })
+                    
+        # ---- 2. CISA KEV API 解析 (覆蓋今天與昨天) ----
+        elif fmt == "CISA_API":
+            res = requests.get(url, timeout=10)
+            if res.status_code == 200:
+                for v in res.json().get("vulnerabilities", []):
+                    date_added = v.get("dateAdded", "")
+                    
+                    # 【核心修正】只要是今天或昨天的公告，通通不漏抓
+                    if date_added in [TODAY_STR, YESTERDAY_STR]:
+                        local_results.append({
+                            "title": f"CISA KEV 警訊: {v.get('cveID')} - {v.get('vulnerabilityName')}",
+                            "url": f"https://nvd.nist.gov/vuln/detail/{v.get('cveID')}",
+                            "raw_content": f"{v.get('shortDescription')} Action: {v.get('requiredAction')}",
+                            "created_at": f"{date_added}T08:00:00+08:00"
+                        })
+                        
+        # ---- 3. GitHub Exploit API 解析 ----
+        elif fmt == "GITHUB_API":
+            res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            if res.status_code == 200:
+                for item in res.json().get("items", [])[:5]:
+                    local_results.append({
+                        "title": f"GitHub 全新漏洞 PoC: {item.get('full_name')}",
+                        "url": item.get("html_url"),
+                        "raw_content": item.get("description") or "打上了 exploit 標籤的項目。",
+                        "created_at": item.get("created_at", NOW_TW.isoformat())
+                    })
+    except Exception as e:
+        print(f"[Fetch Error] 管道 {name} 發生異常: {e}")
+    return local_results
+
+# ==========================================
+# 3. Supabase 資料庫上傳邏輯 (使用 Upsert)
+# ==========================================
+def upload_to_supabase(data_list):
+    print(f"\n[Supabase] 開始將 {len(data_list)} 筆資料同步至 Supabase...")
+    if not data_list:
+        return
+    try:
+        # 使用 upsert，當 url 衝突時會自動更新該筆資料，避免重複並防止噴錯
+        response = supabase.table("cti_reports").upsert(data_list, on_conflict="url").execute()
+        print(f"[Supabase SUCCESS] 成功寫入/更新資料庫！")
+    except Exception as e:
+        print(f"[Supabase ERROR] 寫入資料庫失敗: {e}")
+
+# ==========================================
+# 4. 主控制管線
+# ==========================================
+def main():
+    print(f"=== 啟動 2026 全通路 CTI 融合與 Supabase 同步系統 ===")
+    print(f"目前時間 (TW): {NOW_TW.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"時間比對窗口: 過去 48 小時內 ({YESTERDAY_STR} 至 {TODAY_STR})")
+    print(f"==================================================")
+    
+    raw_reports = []
+    seen_urls = set()
+    final_rows = []
+    
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        future_to_source = {executor.submit(fetch_and_parse, name, cfg): name for name, cfg in CTI_REGISTRY.items()}
+        for future in as_completed(future_to_source):
+            source_name = future_to_source[future]
+            fetched_data = future.result()
+            if fetched_data:
+                print(f" -> 管道 [{source_name}] 命中 {len(fetched_data)} 筆符合時間窗口之情報！")
+                raw_reports.extend(fetched_data)
+
+    print("\n[AI Parsing] 開始進行 AI 結構化強化...")
+    for report in raw_reports:
+        if report["url"] in seen_urls:
+            continue
+        seen_urls.add(report["url"])
+        
+        ai_enriched = ai_enrichment_engine(report["title"], report["raw_content"])
+        if ai_enriched:
+            final_rows.append({
+                "title": report["title"],
+                "url": report["url"],
+                "threat_type": ai_enriched.threat_type,
+                "severity": ai_enriched.severity,
+                "location": ai_enriched.location,
+                "lat": ai_enriched.lat,
+                "lng": ai_enriched.lng,
+                "created_at": report["created_at"],
+                "summary": ai_enriched.Summary,
+                "suggestion": ai_enriched.Suggestion
+            })
+            
+    if final_rows:
+        # 1. 同步至 Supabase
+        upload_to_supabase(final_rows)
+        
+        # 2. 依然保留本地 CSV 備份
+        df = pd.DataFrame(final_rows)
+        df.to_csv(f"cti_backup_{TODAY_STR}.csv", index=False, encoding="utf-8-sig")
+        print(f"\n[SUCCESS] 全部流程執行完畢，共處理解析 {len(final_rows)} 筆不重複情資。")
+    else:
+        print(f"\n[INFO] 本次執行無新情資需要上傳。")
+
+if __name__ == "__main__":
+    main()
