@@ -37,32 +37,44 @@ supabase_key = os.environ["SUPABASE_KEY"]
 supabase: Client = create_client(supabase_url, supabase_key)
 
 # ==========================================
-# 2. 18 大權威情資來源註冊表
+# 2. 18 大權威情資來源註冊表 (CTI Source Registry)
 # ==========================================
 CTI_REGISTRY = {
+    # --- 1. 權威資安新聞與專業媒體 ---
     "BleepingComputer": {"format": "RSS", "url": "https://www.bleepingcomputer.com/feed/"},
     "SecurityWeek": {"format": "RSS", "url": "https://feeds.feedburner.com/securityweek"},
     "DarkReading": {"format": "RSS", "url": "https://www.darkreading.com/rss.xml"},
     "CyberScoop": {"format": "RSS", "url": "https://cyberscoop.com/feed/"},
     "CybersecurityDive": {"format": "RSS", "url": "https://www.cybersecuritydive.com/feed/"},
+
+    # --- 2. 漏洞公告與原廠安全通報 ---
     "MSRC_Blog": {"format": "RSS", "url": "https://msrc.microsoft.com/blog/feed"},
     "Google_Chrome_Releases": {"format": "RSS", "url": "https://chromereleases.googleblog.com/feeds/posts/default"},
     "Cisco_Advisories": {"format": "RSS", "url": "https://tools.cisco.com/security/center/rss.x?i=44"},
     "PaloAlto_Advisories": {"format": "RSS", "url": "https://security.paloaltonetworks.com/rss.xml"},
+
+    # --- 3. 國家級資安應變中心與執法機構 ---
     "Fortinet_PSIRT": {"format": "RSS", "url": "https://www.fortinet.com/content/fortinet-blog/us/en/rss-feeds/psirt.rss"},
     "CISA_KEV": {"format": "CISA_API", "url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"},
     "Singapore_CSA": {"format": "RSS", "url": "https://www.csa.gov/rss/alerts-and-advisories"},
     "Taiwan_TWCERT": {"format": "RSS", "url": "https://www.twcert.org.tw/tw/lp-132-1.xml"},
     "FBI_IC3": {"format": "RSS", "url": "https://www.ic3.gov/Home/RssAlerts"},
+
+    # --- 4. 資安實驗室與威脅情報部落格 ---
     "Cisco_Talos": {"format": "RSS", "url": "https://blog.talosintelligence.com/rss/"},
     "Mandiant_Blog": {"format": "RSS", "url": "https://www.mandiant.com/resources/blog/rss.xml"},
     "TrendMicro_Research": {"format": "RSS", "url": "https://feeds.trendmicro.com/TrendMicroSecurityNews"},
     "Malwarebytes_Labs": {"format": "RSS", "url": "https://www.malwarebytes.com/blog/feed"},
     "SentinelOne_Blog": {"format": "RSS", "url": "https://www.sentinelone.com/blog/feed/"},
+    
+    # --- 5. 開源代碼庫與漏洞概念驗證 (範例 API) ---
     # GitHub API 查詢條件改為大於等於昨天，確保完整覆蓋 48 小時
     "GitHub_Exploit_Search": {"format": "GITHUB_API", "url": f"https://api.github.com/search/repositories?q=created:%3E={YESTERDAY_STR}+topic:exploit&sort=stars"}
 }
 
+# ==========================================
+# Pydantic 結構化資料模型
+# ==========================================
 class SecurityEnrichment(BaseModel):
     threat_type: str = Field(description="威脅類型。例如：DDoS、漏洞、資料外洩、漏洞修補等")
     severity: str = Field(description="嚴重程度。必須嚴格填入 'High' 或 'Medium' 或 'Normal'")
@@ -72,9 +84,23 @@ class SecurityEnrichment(BaseModel):
     Summary: str = Field(description="將原文精煉並翻譯為繁體中文的新聞內容摘要，不超過150字")
     Suggestion: str = Field(description="站在資安專家角度，針對該事件給出具體、可執行的繁體中文處置或緩解作法建議")
 
+# ==========================================
+# AI 核心語意增強引擎 (LLM Engine)
+# ==========================================
 def ai_enrichment_engine(title: str, raw_summary: str) -> SecurityEnrichment:
     model = genai.GenerativeModel("gemini-1.5-flash")
-    prompt = f"你是一個頂尖的威脅情報分析師。請精確剖析以下資安情資並輸出結構化 JSON。\n【標題】：{title}\n【內容】：{raw_summary}"
+    
+    prompt = f"""
+    你是一個頂尖的威脅情報分析師 (Cyber Threat Intelligence Analyst)。請精確剖析以下資安情資，並輸出結構化 JSON。
+    
+    【標題】：{title}
+    【內容描述】：{raw_summary}
+    
+    規範：
+    1. Summary 與 Suggestion 必須為繁體中文（台灣），用詞需符合專業 CISSP 術語（如：在野利用、社交工程、憑證竊取）。
+    2. 依據內容精準賦予 severity (High/Medium/Normal)。
+    3. 準確識別地理座標。若提及特定國家受災，給出該國首都經緯度；若屬全球通用軟體漏洞，lat/lng 填 0.0000，location 填 '全球'。
+    """
     try:
         time.sleep(0.5)
         response = model.generate_content(
@@ -88,6 +114,9 @@ def ai_enrichment_engine(title: str, raw_summary: str) -> SecurityEnrichment:
         print(f"  [AI Error] 處理失敗: {e}")
         return None
 
+# ==========================================
+# 解耦的異質資料解析器 (Parsers)
+# ==========================================
 def fetch_and_parse(name, config):
     local_results = []
     fmt = config["format"]
@@ -167,7 +196,8 @@ def main():
     raw_reports = []
     seen_urls = set()
     final_rows = []
-    
+
+    # 步驟一：多執行緒平行抓取 18 個來源 (I/O Bound 最佳化)
     with ThreadPoolExecutor(max_workers=8) as executor:
         future_to_source = {executor.submit(fetch_and_parse, name, cfg): name for name, cfg in CTI_REGISTRY.items()}
         for future in as_completed(future_to_source):
@@ -177,6 +207,7 @@ def main():
                 print(f" -> 管道 [{source_name}] 命中 {len(fetched_data)} 筆符合時間窗口之情報！")
                 raw_reports.extend(fetched_data)
 
+    # 步驟二：全域去重與 AI 語意強化 (CPU/API Bound)
     print("\n[AI Parsing] 開始進行 AI 結構化強化...")
     for report in raw_reports:
         if report["url"] in seen_urls:
@@ -197,7 +228,8 @@ def main():
                 "summary": ai_enriched.Summary,
                 "suggestion": ai_enriched.Suggestion
             })
-            
+
+    # 步驟三：匯出合規 CSV 檔
     if final_rows:
         # 1. 同步至 Supabase
         upload_to_supabase(final_rows)
