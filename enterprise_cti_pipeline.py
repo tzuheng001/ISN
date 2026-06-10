@@ -12,6 +12,9 @@ from pydantic import BaseModel, Field
 # 引入 Supabase 套件
 from supabase import create_client, Client
 
+# 引入 Google API 的頻率限制異常類型
+from google.api_core.exceptions import ResourceExhausted
+
 # ==========================================
 # 1. 基礎配置與時區/時間窗口校正
 # ==========================================
@@ -22,6 +25,11 @@ YESTERDAY_STR = (NOW_TW - timedelta(days=1)).strftime("%Y-%m-%d")
 
 # 定義 48 小時滑動窗口，避免任何因時差或排程造成的情報盲區
 TIME_WINDOW = timedelta(hours=48)
+
+# ------ AI 頻率限制配置 ------
+MAX_RPM = 10  # 如果你是付費帳戶，可以調高（例如 1000）；免費版通常是 15
+# 計算每次請求之間理論上應間隔的秒數，留一點緩衝（例如 15 RPM = 每 4 秒多發一次）
+BASE_DELAY = (60.0 / MAX_RPM) + 0.2 
 
 # 驗證環境變數
 REQUIRED_ENV = ["GEMINI_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
@@ -68,7 +76,6 @@ CTI_REGISTRY = {
     "SentinelOne_Blog": {"format": "RSS", "url": "https://www.sentinelone.com/blog/feed/"},
     
     # --- 5. 開源代碼庫與漏洞概念驗證 (範例 API) ---
-    # GitHub API 查詢條件改為大於等於昨天，確保完整覆蓋 48 小時
     "GitHub_Exploit_Search": {"format": "GITHUB_API", "url": f"https://api.github.com/search/repositories?q=created:%3E={YESTERDAY_STR}+topic:exploit&sort=stars"}
 }
 
@@ -85,10 +92,10 @@ class SecurityEnrichment(BaseModel):
     Suggestion: str = Field(description="站在資安專家角度，針對該事件給出具體、可執行的繁體中文處置或緩解作法建議")
 
 # ==========================================
-# AI 核心語意增強引擎 (LLM Engine)
+# AI 核心語意增強引擎 (LLM Engine) - 已整合重試與防爆機制
 # ==========================================
-def ai_enrichment_engine(title: str, raw_summary: str) -> SecurityEnrichment:
-    model = genai.GenerativeModel("gemini-3.5-flash")
+def ai_enrichment_engine(title: str, raw_summary: str, max_retries: int = 5) -> SecurityEnrichment:
+    model = genai.GenerativeModel("gemini-3.1-flash-lite")
     
     prompt = f"""
     你是一個頂尖的威脅情報分析師 (Cyber Threat Intelligence Analyst)。請精確剖析以下資安情資，並輸出結構化 JSON。
@@ -101,18 +108,35 @@ def ai_enrichment_engine(title: str, raw_summary: str) -> SecurityEnrichment:
     2. 依據內容精準賦予 severity (High/Medium/Normal)。
     3. 準確識別地理座標。若提及特定國家受災，給出該國首都經緯度；若屬全球通用軟體漏洞，lat/lng 填 0.0000，location 填 '全球'。
     """
-    try:
-        time.sleep(0.5)
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.GenerationConfig(
-                response_mime_type="application/json", response_schema=SecurityEnrichment, temperature=0.1
+    
+    for attempt in range(max_retries):
+        try:
+            # 正常狀況下的配速防線
+            if attempt == 0:
+                time.sleep(BASE_DELAY)
+                
+            response = model.generate_content(
+                prompt,
+                generation_config=genai.GenerationConfig(
+                    response_mime_type="application/json", response_schema=SecurityEnrichment, temperature=0.1
+                )
             )
-        )
-        return SecurityEnrichment.model_validate_json(response.text)
-    except Exception as e:
-        print(f"  [AI Error] 處理失敗: {e}")
-        return None
+            return SecurityEnrichment.model_validate_json(response.text)
+            
+        except ResourceExhausted:
+            # 專門捕捉 429 錯誤，進行指數退避 (Exponential Backoff)
+            # 第一次重試等 BASE*2，第二次等 BASE*4，依此類推
+            wait_time = BASE_DELAY * (2 ** attempt)
+            print(f"  [RPM Limit] 觸發 API 頻率上限！將在 {wait_time:.1f} 秒後進行第 {attempt + 1}/{max_retries} 次重試...")
+            time.sleep(wait_time)
+            
+        except Exception as e:
+            # 捕捉其他與 RPM 無關的錯誤（如模型解析失敗、格式不符等），直接跳出不浪費時間重試
+            print(f"  [AI Error] 處理失敗 (非頻率問題): {e}")
+            return None
+            
+    print(f"  [AI Error] 已達最大重試次數 ({max_retries})，放棄此筆資料。")
+    return None
 
 # ==========================================
 # 解耦的異質資料解析器 (Parsers)
@@ -122,13 +146,10 @@ def fetch_and_parse(name, config):
     fmt = config["format"]
     url = config["url"]
     try:
-        # ---- 1. RSS 串流解析 (引入滑動窗口判斷) ----
         if fmt == "RSS":
             feed = feedparser.parse(url)
             for entry in feed.entries:
                 pub_time = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc).astimezone(TZ_TW) if hasattr(entry, "published_parsed") and entry.published_parsed else NOW_TW
-                
-                # 【核心修正】檢查文章發布時間是否在過去 48 小時的時間窗口內
                 if NOW_TW - pub_time <= TIME_WINDOW:
                     summary_raw = getattr(entry, "summary", getattr(entry, "description", ""))
                     clean_content = re.sub('<[^<]+?>', '', summary_raw)[:500]
@@ -139,14 +160,11 @@ def fetch_and_parse(name, config):
                         "created_at": pub_time.isoformat()
                     })
                     
-        # ---- 2. CISA KEV API 解析 (覆蓋今天與昨天) ----
         elif fmt == "CISA_API":
             res = requests.get(url, timeout=10)
             if res.status_code == 200:
                 for v in res.json().get("vulnerabilities", []):
                     date_added = v.get("dateAdded", "")
-                    
-                    # 【核心修正】只要是今天或昨天的公告，通通不漏抓
                     if date_added in [TODAY_STR, YESTERDAY_STR]:
                         local_results.append({
                             "title": f"CISA KEV 警訊: {v.get('cveID')} - {v.get('vulnerabilityName')}",
@@ -155,7 +173,6 @@ def fetch_and_parse(name, config):
                             "created_at": f"{date_added}T08:00:00+08:00"
                         })
                         
-        # ---- 3. GitHub Exploit API 解析 ----
         elif fmt == "GITHUB_API":
             res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
             if res.status_code == 200:
@@ -178,7 +195,6 @@ def upload_to_supabase(data_list):
     if not data_list:
         return
     try:
-        # 使用 upsert，當複合鍵 "url,title" 衝突時會自動更新該筆資料，避免重複並防止噴錯
         response = supabase.table("News").upsert(data_list, on_conflict="url,title").execute()
         print(f"[Supabase SUCCESS] 成功寫入/更新資料庫！")
     except Exception as e:
@@ -197,7 +213,7 @@ def main():
     seen_urls = set()
     final_rows = []
 
-    # 步驟一：多執行緒平行抓取 18 個來源 (I/O Bound 最佳化)
+    # 步驟一：多執行緒平行抓取 18 個來源
     with ThreadPoolExecutor(max_workers=8) as executor:
         future_to_source = {executor.submit(fetch_and_parse, name, cfg): name for name, cfg in CTI_REGISTRY.items()}
         for future in as_completed(future_to_source):
@@ -207,7 +223,7 @@ def main():
                 print(f" -> 管道 [{source_name}] 命中 {len(fetched_data)} 筆符合時間窗口之情報！")
                 raw_reports.extend(fetched_data)
 
-    # 步驟二：全域去重與 AI 語意強化 (CPU/API Bound)
+    # 步驟二：全域去重與 AI 語意強化 (此處保持單執行緒循序呼叫，搭配動態配速)
     print("\n[AI Parsing] 開始進行 AI 結構化強化...")
     for report in raw_reports:
         unique_meta = (report["url"], report["title"])
@@ -230,12 +246,9 @@ def main():
                 "suggestion": ai_enriched.Suggestion
             })
 
-    # 步驟三：匯出合規 CSV 檔
+    # 步驟三：匯出合規 CSV 檔與同步
     if final_rows:
-        # 1. 同步至 Supabase
         upload_to_supabase(final_rows)
-        
-        # 2. 依然保留本地 CSV 備份
         df = pd.DataFrame(final_rows)
         df.to_csv(f"cti_backup_{TODAY_STR}.csv", index=False, encoding="utf-8-sig")
         print(f"\n[SUCCESS] 全部流程執行完畢，共處理解析 {len(final_rows)} 筆不重複情資。")
