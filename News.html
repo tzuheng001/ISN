@@ -80,18 +80,20 @@
 
         /* 地圖脈衝動畫 */
         .pulse-icon {
+            --pulse-color: 59, 130, 246;
             border-radius: 50%;
-            background: rgba(239, 68, 68, 1);
-            box-shadow: 0 0 0 rgba(239, 68, 68, 0.7);
+            background: rgb(var(--pulse-color));
+            box-shadow: 0 0 0 rgba(var(--pulse-color), 0.7);
             animation: pulse 1.5s infinite;
         }
-        .pulse-icon.severity-high { background: #ef4444; box-shadow: 0 0 0 rgba(239, 68, 68, 0.7); }
-        .pulse-icon.severity-medium { background: #f59e0b; box-shadow: 0 0 0 rgba(245, 158, 11, 0.7); animation-delay: 0.2s;}
+        .pulse-icon.severity-high { --pulse-color: 239, 68, 68; }
+        .pulse-icon.severity-medium { --pulse-color: 234, 179, 8; animation-delay: 0.2s; }
+        .pulse-icon.severity-normal { --pulse-color: 59, 130, 246; animation-delay: 0.4s; }
 
         @keyframes pulse {
-            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
-            70% { transform: scale(1); box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); }
-            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(var(--pulse-color), 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 15px rgba(var(--pulse-color), 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(var(--pulse-color), 0); }
         }
 
         /* 跑馬燈 */
@@ -158,8 +160,51 @@
                 <h2 class="text-xl font-bold text-cyan-400 tech-font">📂 歷史快訊歸檔 (Historical Archive)</h2>
                 <button onclick="toggleHistory(false)" class="text-gray-400 hover:text-white text-3xl font-bold px-2">&times;</button>
             </div>
-            <div id="history-list" class="flex-1 overflow-y-auto p-6 bg-slate-950 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 content-start">
-                <!-- 歷史卡片會被移到這裡 -->
+            <div class="flex-1 overflow-hidden bg-slate-950 p-4 md:p-6">
+                <div class="flex h-full flex-col gap-4 lg:flex-row">
+                    <section class="flex min-h-[220px] flex-col overflow-hidden border border-cyan-900/70 bg-slate-900/70 lg:w-[340px] lg:shrink-0">
+                        <div class="shrink-0 border-b border-cyan-900/70 bg-slate-900 p-3">
+                            <div class="flex items-center justify-between gap-3">
+                                <h3 class="text-sm font-bold text-cyan-300">今日歷史快訊</h3>
+                                <span class="tech-font text-xs text-cyan-500" id="today-history-count">0</span>
+                            </div>
+                        </div>
+                        <div id="today-history-list" class="flex-1 space-y-3 overflow-y-auto p-3">
+                            <div class="text-center text-xs text-gray-500 tech-font" id="today-history-empty">今日暫無歷史快訊</div>
+                        </div>
+                    </section>
+
+                    <section class="flex min-h-0 flex-1 flex-col overflow-hidden">
+                        <div class="shrink-0 border-b border-slate-800 pb-3">
+                            <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                                <div class="flex items-center gap-3">
+                                    <h3 class="text-sm font-bold text-gray-200">其他歷史快訊</h3>
+                                    <span class="tech-font text-xs text-slate-500" id="other-history-count">0</span>
+                                </div>
+                                <div class="flex w-full flex-col gap-2 sm:flex-row xl:w-auto">
+                                    <input
+                                        id="history-search-input"
+                                        type="search"
+                                        maxlength="80"
+                                        autocomplete="off"
+                                        class="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition-all placeholder:text-slate-600 focus:border-cyan-500 xl:w-72"
+                                        placeholder="關鍵字查詢"
+                                    >
+                                    <input
+                                        id="history-date-input"
+                                        type="date"
+                                        class="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition-all focus:border-cyan-500 sm:w-44"
+                                        aria-label="日期查詢"
+                                    >
+                                </div>
+                            </div>
+                        </div>
+                        <div id="history-list" class="grid flex-1 grid-cols-1 gap-4 overflow-y-auto pt-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 content-start">
+                            <!-- 歷史卡片會被移到這裡 -->
+                            <div class="col-span-full hidden text-center text-xs text-gray-500 tech-font" id="history-search-empty">找不到符合條件的其他歷史快訊</div>
+                        </div>
+                    </section>
+                </div>
             </div>
         </div>
     </main>
@@ -272,8 +317,8 @@
                 urlLink.textContent = '';
             }
 
-            document.getElementById('detail-summary').textContent = getOptionalText(detailData.Summary) || '未提供內容摘要';
-            document.getElementById('detail-suggestion').textContent = getOptionalText(detailData.Suggestion) || '未提供建議處置';
+            document.getElementById('detail-summary').textContent = getOptionalText(detailData.summary) || '未提供內容摘要';
+            document.getElementById('detail-suggestion').textContent = getOptionalText(detailData.suggestion) || '未提供建議處置';
 
             status.classList.add('hidden');
             content.classList.remove('hidden');
@@ -292,13 +337,13 @@
 
             const { data, error } = await supabaseClient
                 .from(TABLE_NAME)
-                .select('url, Summary, Suggestion')
+                .select('url, summary, suggestion')
                 .eq('id', eventId)
                 .single();
 
             if (error) {
                 console.error('事件細節讀取失敗:', error);
-                setDetailStatus('細節讀取失敗，請確認 Supabase 欄位 url、Summary、Suggestion 與 RLS 權限設定。', true);
+                setDetailStatus('細節讀取失敗，請確認 Supabase 欄位 url、summary、suggestion 與 RLS 權限設定。', true);
                 return;
             }
 
@@ -374,7 +419,10 @@
         // --- 3. 狀態與佇列管理 ---
         let eventQueue = []; // 用於存放畫面上的活動節點 (上限 20)
         let totalHistoryCount = 0;
+        let todayHistoryCount = 0;
+        let otherHistoryCount = 0;
         const MAX_LIVE_EVENTS = 20;
+        const MAX_SEARCH_KEYWORD_LENGTH = 80;
 
         function clearAllHighlights() {
             document.querySelectorAll('.active-card').forEach(el => {
@@ -407,6 +455,166 @@
 
 
         // --- 4. 處理與渲染新事件 (含連動與歷史歸檔) ---
+        function escapeHTML(value) {
+            const text = getOptionalText(value);
+            const escapeMap = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            };
+
+            return text.replace(/[&<>"']/g, char => escapeMap[char]);
+        }
+
+        function normalizeSearchText(value) {
+            const text = getOptionalText(value);
+            const normalized = typeof text.normalize === 'function' ? text.normalize('NFKC') : text;
+            return normalized.toLocaleLowerCase('zh-TW');
+        }
+
+        function sanitizeSearchKeyword(value) {
+            return normalizeSearchText(value).slice(0, MAX_SEARCH_KEYWORD_LENGTH);
+        }
+
+        function getDateKey(value) {
+            if (!value) return '';
+
+            const date = new Date(value);
+            if (Number.isNaN(date.getTime())) return '';
+
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+
+        function sanitizeDateFilter(value) {
+            const dateText = getOptionalText(value);
+            return /^\d{4}-\d{2}-\d{2}$/.test(dateText) ? dateText : '';
+        }
+
+        function buildHistorySearchText(eventData) {
+            return normalizeSearchText([
+                eventData.threat_type,
+                eventData.title,
+                eventData.location,
+                eventData.severity,
+                eventData.created_at,
+                eventData.url,
+                eventData.summary,
+                eventData.suggestion
+            ].map(value => getOptionalText(value)).join(' '));
+        }
+
+        function updateOtherHistoryCountLabel(visibleCount = otherHistoryCount) {
+            const label = document.getElementById('other-history-count');
+            const keyword = sanitizeSearchKeyword(document.getElementById('history-search-input')?.value || '');
+            const dateFilter = sanitizeDateFilter(document.getElementById('history-date-input')?.value || '');
+            const hasActiveFilter = Boolean(keyword || dateFilter);
+            label.textContent = hasActiveFilter ? `${visibleCount} / ${otherHistoryCount}` : otherHistoryCount;
+        }
+
+        function filterOtherHistoryEvents() {
+            const keyword = sanitizeSearchKeyword(document.getElementById('history-search-input')?.value || '');
+            const dateFilter = sanitizeDateFilter(document.getElementById('history-date-input')?.value || '');
+            const cards = document.querySelectorAll('#history-list [data-history-card="other"]');
+            let visibleCount = 0;
+
+            cards.forEach(card => {
+                const matchedKeyword = !keyword || card.dataset.searchText.includes(keyword);
+                const matchedDate = !dateFilter || card.dataset.eventDate === dateFilter;
+                const matched = matchedKeyword && matchedDate;
+                card.style.display = matched ? '' : 'none';
+                if (matched) visibleCount++;
+            });
+
+            const emptyState = document.getElementById('history-search-empty');
+            if (emptyState) {
+                emptyState.classList.toggle('hidden', visibleCount > 0 || (!keyword && !dateFilter));
+            }
+
+            updateOtherHistoryCountLabel(visibleCount);
+        }
+
+        function initializeHistorySearch() {
+            const keywordInput = document.getElementById('history-search-input');
+            const dateInput = document.getElementById('history-date-input');
+
+            if (keywordInput) keywordInput.addEventListener('input', filterOtherHistoryEvents);
+            if (dateInput) dateInput.addEventListener('input', filterOtherHistoryEvents);
+        }
+
+        function getSeverityConfig(severity) {
+            const level = String(severity || 'Normal').trim().toLowerCase();
+
+            if (level === 'high') {
+                return {
+                    markerClass: 'severity-high',
+                    badgeClass: 'bg-red-900 text-red-300',
+                    popupColor: '#ef4444'
+                };
+            }
+
+            if (level === 'medium') {
+                return {
+                    markerClass: 'severity-medium',
+                    badgeClass: 'bg-yellow-900 text-yellow-300',
+                    popupColor: '#eab308'
+                };
+            }
+
+            return {
+                markerClass: 'severity-normal',
+                badgeClass: 'bg-blue-900 text-blue-300',
+                popupColor: '#3b82f6'
+            };
+        }
+
+        function createPulseIcon(severity) {
+            const severityConfig = getSeverityConfig(severity);
+            return L.divIcon({
+                className: `pulse-icon ${severityConfig.markerClass}`,
+                iconSize: [12, 12]
+            });
+        }
+
+        function bindEventPopup(marker, eventData) {
+            const severityConfig = getSeverityConfig(eventData.severity);
+            marker.bindPopup(`
+                <strong style="color: ${severityConfig.popupColor};">${escapeHTML(eventData.threat_type)}</strong><br>
+                ${escapeHTML(eventData.title)}<br>
+                <span style="color:#aaa; font-size:12px;">地點: ${escapeHTML(eventData.location)}</span>
+            `, {
+                autoPanPaddingTopLeft: [10, 100]
+            });
+        }
+
+        function showTemporaryHistoryMarker(eventData) {
+            const lat = Number(eventData.lat);
+            const lng = Number(eventData.lng);
+
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+                console.warn('歷史事件缺少有效經緯度，無法建立臨時標記:', eventData);
+                return;
+            }
+
+            const marker = L.marker([lat, lng], {
+                icon: createPulseIcon(eventData.severity),
+                zIndexOffset: 1000
+            }).addTo(map);
+
+            bindEventPopup(marker, eventData);
+            marker.openPopup();
+
+            setTimeout(() => {
+                if (map.hasLayer(marker)) {
+                    map.removeLayer(marker);
+                }
+            }, 10000);
+        }
+
         function formatEventDateTime(value) {
             const date = value ? new Date(value) : new Date();
             if (Number.isNaN(date.getTime())) return '--/-- --:--';
@@ -428,22 +636,22 @@
 
         function buildEventCardHTML(eventData) {
             const lat = Number(eventData.lat);
-            const isHighSeverity = eventData.severity === 'High';
+            const severityConfig = getSeverityConfig(eventData.severity);
             const displayTime = formatEventDateTime(eventData.created_at);
             const displayLat = Number.isFinite(lat) ? lat.toFixed(2) : '--';
 
             return `
                 <div class="flex justify-between items-start mb-1 pointer-events-none">
-                    <span class="text-xs font-bold px-2 py-0.5 rounded tech-font ${isHighSeverity ? 'bg-red-900 text-red-300' : 'bg-yellow-900 text-yellow-300'}">
-                        ${eventData.type}
+                    <span class="text-xs font-bold px-2 py-0.5 rounded tech-font ${severityConfig.badgeClass}">
+                        ${escapeHTML(eventData.threat_type)}
                     </span>
                     <span class="ml-2 whitespace-nowrap text-right text-[10px] leading-tight text-gray-400 tech-font">${displayTime}</span>
                 </div>
                 <div class="text-sm font-semibold text-blue-200 pointer-events-none block line-clamp-2 mb-1">
-                    ${eventData.title}
+                    ${escapeHTML(eventData.title)}
                 </div>
                 <p class="text-xs text-gray-400 pointer-events-none flex justify-between">
-                    <span>${eventData.location}</span>
+                    <span>${escapeHTML(eventData.location)}</span>
                     <span class="text-[9px] text-cyan-800">LAT: ${displayLat}</span>
                 </p>
                 <div class="mt-2 flex justify-end">
@@ -454,19 +662,42 @@
             `;
         }
 
+        function isTodayEvent(createdAt) {
+            if (!createdAt) return false;
+
+            const eventDate = new Date(createdAt);
+            if (Number.isNaN(eventDate.getTime())) return false;
+
+            const today = new Date();
+            return eventDate.getFullYear() === today.getFullYear()
+                && eventDate.getMonth() === today.getMonth()
+                && eventDate.getDate() === today.getDate();
+        }
+
         function renderHistoryEvent(eventData, insertMode = 'append') {
-            const historyList = document.getElementById('history-list');
+            const isTodayHistory = isTodayEvent(eventData.created_at);
+            const historyList = document.getElementById(isTodayHistory ? 'today-history-list' : 'history-list');
             const historyCard = document.createElement('div');
             const lat = eventData.lat;
             const lng = eventData.lng;
 
-            historyCard.className = "bg-slate-900 p-4 rounded border border-slate-700 hover:border-slate-500 transition-all opacity-80 hover:opacity-100 cursor-pointer";
+            historyCard.className = isTodayHistory
+                ? "bg-slate-950 p-4 rounded border border-cyan-900 hover:border-cyan-500 transition-all opacity-90 hover:opacity-100 cursor-pointer"
+                : "bg-slate-900 p-4 rounded border border-slate-700 hover:border-slate-500 transition-all opacity-80 hover:opacity-100 cursor-pointer";
+
+            if (!isTodayHistory) {
+                historyCard.dataset.historyCard = 'other';
+                historyCard.dataset.searchText = buildHistorySearchText(eventData);
+                historyCard.dataset.eventDate = getDateKey(eventData.created_at);
+            }
+
             historyCard.innerHTML = buildEventCardHTML(eventData);
             attachDetailButton(historyCard, eventData);
 
             historyCard.addEventListener('click', () => {
                 toggleHistory(false);
                 flyToEvent(lat, lng);
+                showTemporaryHistoryMarker(eventData);
             });
 
             if (insertMode === 'prepend') {
@@ -477,6 +708,31 @@
 
             totalHistoryCount++;
             document.getElementById('history-count').textContent = totalHistoryCount;
+
+            if (isTodayHistory) {
+                const emptyState = document.getElementById('today-history-empty');
+                if (emptyState) emptyState.remove();
+
+                todayHistoryCount++;
+                document.getElementById('today-history-count').textContent = todayHistoryCount;
+            } else {
+                const activeKeyword = sanitizeSearchKeyword(document.getElementById('history-search-input')?.value || '');
+                const activeDate = sanitizeDateFilter(document.getElementById('history-date-input')?.value || '');
+                otherHistoryCount++;
+
+                const matchedKeyword = !activeKeyword || historyCard.dataset.searchText.includes(activeKeyword);
+                const matchedDate = !activeDate || historyCard.dataset.eventDate === activeDate;
+
+                if (!matchedKeyword || !matchedDate) {
+                    historyCard.style.display = 'none';
+                }
+
+                if (activeKeyword || activeDate) {
+                    filterOtherHistoryEvents();
+                } else {
+                    updateOtherHistoryCountLabel();
+                }
+            }
         }
 
         function renderNewEvent(eventData) {
@@ -485,22 +741,11 @@
             const lng = eventData.lng;
 
             // A. 建立地圖標記
-            const isHighSeverity = eventData.severity === 'High';
-            const pulseIcon = L.divIcon({
-                className: `pulse-icon ${isHighSeverity ? 'severity-high' : 'severity-medium'}`,
-                iconSize: [12, 12]
-            });
-
+            const pulseIcon = createPulseIcon(eventData.severity);
             const marker = L.marker([lat, lng], { icon: pulseIcon }).addTo(map);
             
             // 💡 加入 autoPanPaddingTopLeft，防止地圖打開訊息框時又自動把它拉回死角
-            marker.bindPopup(`
-                <strong style="color: #ef4444;">${eventData.type}</strong><br>
-                ${eventData.title}<br>
-                <span style="color:#aaa; font-size:12px;">地點: ${eventData.location}</span>
-            `, {
-                autoPanPaddingTopLeft: [10, 100] // 告訴 Leaflet 頂部 100px 是保留區
-            });
+            bindEventPopup(marker, eventData);
 
             // B. 建立側邊列表卡片
             const feedList = document.getElementById('feed-list');
@@ -560,7 +805,7 @@
 
             // 更新跑馬燈
             document.getElementById('ticker-text').textContent = 
-                `[最新警報] ${eventData.location} 發生 ${eventData.type}：${eventData.title} - 正在持續追蹤中...`;
+                `[最新警報] ${getOptionalText(eventData.location)} 發生 ${getOptionalText(eventData.threat_type)}：${getOptionalText(eventData.title)} - 正在持續追蹤中...`;
         }
 
         // ==========================================
@@ -661,6 +906,7 @@
         }
 
         // 4. 啟動程序
+        initializeHistorySearch();
         fetchInitialData().then(() => {
                 subscribeToNewAlerts();
         });
