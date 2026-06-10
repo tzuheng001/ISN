@@ -1,0 +1,15 @@
+# 排除 Python 編譯暫存檔
+__pycache__/
+*.pyc
+
+# 排除本地產出的 CTI 數據備份檔（因為已經進 Supabase 了）
+*.csv
+
+# 排除虛擬環境（如果你在本地開發有使用的話）
+.venv/
+venv/
+ENV/
+
+# 排除作業系統暫存
+.DS_Store
+Thumbs.db
