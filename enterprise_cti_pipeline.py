@@ -88,7 +88,7 @@ class SecurityEnrichment(BaseModel):
 # AI 核心語意增強引擎 (LLM Engine)
 # ==========================================
 def ai_enrichment_engine(title: str, raw_summary: str) -> SecurityEnrichment:
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    model = genai.GenerativeModel("gemini-3.5-flash")
     
     prompt = f"""
     你是一個頂尖的威脅情報分析師 (Cyber Threat Intelligence Analyst)。請精確剖析以下資安情資，並輸出結構化 JSON。
