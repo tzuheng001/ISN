@@ -178,8 +178,8 @@ def upload_to_supabase(data_list):
     if not data_list:
         return
     try:
-        # 使用 upsert，當 url 衝突時會自動更新該筆資料，避免重複並防止噴錯
-        response = supabase.table("cti_reports").upsert(data_list, on_conflict="url").execute()
+        # 使用 upsert，當複合鍵 "url,title" 衝突時會自動更新該筆資料，避免重複並防止噴錯
+        response = supabase.table("News").upsert(data_list, on_conflict="url,title").execute()
         print(f"[Supabase SUCCESS] 成功寫入/更新資料庫！")
     except Exception as e:
         print(f"[Supabase ERROR] 寫入資料庫失敗: {e}")
@@ -210,9 +210,10 @@ def main():
     # 步驟二：全域去重與 AI 語意強化 (CPU/API Bound)
     print("\n[AI Parsing] 開始進行 AI 結構化強化...")
     for report in raw_reports:
-        if report["url"] in seen_urls:
+        unique_meta = (report["url"], report["title"])
+        if unique_meta in seen_urls:
             continue
-        seen_urls.add(report["url"])
+        seen_urls.add(unique_meta)
         
         ai_enriched = ai_enrichment_engine(report["title"], report["raw_content"])
         if ai_enriched:
