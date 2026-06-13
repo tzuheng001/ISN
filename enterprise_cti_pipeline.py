@@ -60,12 +60,13 @@ CTI_REGISTRY = {
     "Google_Chrome_Releases": {"format": "RSS", "url": "https://chromereleases.googleblog.com/feeds/posts/default"},
     "Cisco_Advisories": {"format": "RSS", "url": "https://tools.cisco.com/security/center/rss.x?i=44"},
     "PaloAlto_Advisories": {"format": "RSS", "url": "https://security.paloaltonetworks.com/rss.xml"},
+    "Taiwan_TWCERT": {"format": "RSS", "url": "https://www.twcert.org.tw/tw/rss-132-1.xml"},
 
     # --- 3. 國家級資安應變中心與執法機構 ---
     "Fortinet_PSIRT": {"format": "RSS", "url": "https://www.fortinet.com/content/fortinet-blog/us/en/rss-feeds/psirt.rss"},
     "CISA_KEV": {"format": "CISA_API", "url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"},
     "Singapore_CSA": {"format": "RSS", "url": "https://www.csa.gov/rss/alerts-and-advisories"},
-    "Taiwan_TWCERT": {"format": "RSS", "url": "https://www.twcert.org.tw/tw/lp-132-1.xml"},
+    "Taiwan_TWCERT": {"format": "RSS", "url": "https://www.twcert.org.tw/tw/rss-104-1.xml"},
     "FBI_IC3": {"format": "RSS", "url": "https://www.ic3.gov/Home/RssAlerts"},
 
     # --- 4. 資安實驗室與威脅情報部落格 ---
