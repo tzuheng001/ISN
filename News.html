@@ -165,12 +165,12 @@
                     <section class="flex min-h-[220px] flex-col overflow-hidden border border-cyan-900/70 bg-slate-900/70 lg:w-[340px] lg:shrink-0">
                         <div class="shrink-0 border-b border-cyan-900/70 bg-slate-900 p-3">
                             <div class="flex items-center justify-between gap-3">
-                                <h3 class="text-sm font-bold text-cyan-300">今日歷史快訊</h3>
-                                <span class="tech-font text-xs text-cyan-500" id="today-history-count">0</span>
+                                <h3 class="text-sm font-bold text-cyan-300">24小時內歷史快訊</h3>
+                                <span class="tech-font text-xs text-cyan-500" id="recent-history-count">0</span>
                             </div>
                         </div>
-                        <div id="today-history-list" class="flex-1 space-y-3 overflow-y-auto p-3">
-                            <div class="text-center text-xs text-gray-500 tech-font" id="today-history-empty">今日暫無歷史快訊</div>
+                        <div id="recent-history-list" class="flex-1 space-y-3 overflow-y-auto p-3">
+                            <div class="text-center text-xs text-gray-500 tech-font" id="recent-history-empty">24小時內暫無歷史快訊</div>
                         </div>
                     </section>
 
@@ -361,9 +361,25 @@
         }
 
         // --- 2. 時鐘與地圖初始化 ---
+        const TAIWAN_TIME_ZONE = 'Asia/Taipei';
+
         function updateClock() {
             const now = new Date();
-            document.getElementById('clock').textContent = now.toISOString().replace('T', ' ').substring(0, 19) + ' UTC+8';
+            const taiwanDate = new Intl.DateTimeFormat('zh-TW', {
+                timeZone: TAIWAN_TIME_ZONE,
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit'
+            }).format(now);
+            const taiwanTime = new Intl.DateTimeFormat('zh-TW', {
+                timeZone: TAIWAN_TIME_ZONE,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+            }).format(now);
+
+            document.getElementById('clock').textContent = `臺灣時間 ${taiwanDate} ${taiwanTime}`;
         }
         setInterval(updateClock, 1000);
         updateClock();
@@ -419,10 +435,11 @@
         // --- 3. 狀態與佇列管理 ---
         let eventQueue = []; // 用於存放畫面上的活動節點 (上限 20)
         let totalHistoryCount = 0;
-        let todayHistoryCount = 0;
+        let recentHistoryCount = 0;
         let otherHistoryCount = 0;
         const MAX_LIVE_EVENTS = 20;
         const MAX_SEARCH_KEYWORD_LENGTH = 80;
+        const RECENT_HISTORY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
         function clearAllHighlights() {
             document.querySelectorAll('.active-card').forEach(el => {
@@ -479,15 +496,17 @@
         }
 
         function getDateKey(value) {
-            if (!value) return '';
-
-            const date = new Date(value);
+            const date = value ? new Date(value) : new Date();
             if (Number.isNaN(date.getTime())) return '';
 
-            const year = date.getFullYear();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
-            return `${year}-${month}-${day}`;
+            const dateParts = new Intl.DateTimeFormat('en-US', {
+                timeZone: TAIWAN_TIME_ZONE,
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit'
+            }).formatToParts(date);
+            const partMap = Object.fromEntries(dateParts.map(part => [part.type, part.value]));
+            return `${partMap.year}-${partMap.month}-${partMap.day}`;
         }
 
         function sanitizeDateFilter(value) {
@@ -620,11 +639,13 @@
             if (Number.isNaN(date.getTime())) return '--/-- --:--';
 
             const formattedDate = date.toLocaleDateString('zh-TW', {
+                timeZone: TAIWAN_TIME_ZONE,
                 year: 'numeric',
                 month: '2-digit',
                 day: '2-digit'
             });
             const formattedTime = date.toLocaleTimeString('zh-TW', {
+                timeZone: TAIWAN_TIME_ZONE,
                 hour: '2-digit',
                 minute: '2-digit',
                 second: '2-digit',
@@ -662,30 +683,29 @@
             `;
         }
 
-        function isTodayEvent(createdAt) {
+        function isRecentHistoryEvent(createdAt) {
             if (!createdAt) return false;
 
             const eventDate = new Date(createdAt);
             if (Number.isNaN(eventDate.getTime())) return false;
 
-            const today = new Date();
-            return eventDate.getFullYear() === today.getFullYear()
-                && eventDate.getMonth() === today.getMonth()
-                && eventDate.getDate() === today.getDate();
+            const now = new Date();
+            const elapsed = now.getTime() - eventDate.getTime();
+            return elapsed >= 0 && elapsed <= RECENT_HISTORY_WINDOW_MS;
         }
 
         function renderHistoryEvent(eventData, insertMode = 'append') {
-            const isTodayHistory = isTodayEvent(eventData.created_at);
-            const historyList = document.getElementById(isTodayHistory ? 'today-history-list' : 'history-list');
+            const isRecentHistory = isRecentHistoryEvent(eventData.created_at);
+            const historyList = document.getElementById(isRecentHistory ? 'recent-history-list' : 'history-list');
             const historyCard = document.createElement('div');
             const lat = eventData.lat;
             const lng = eventData.lng;
 
-            historyCard.className = isTodayHistory
+            historyCard.className = isRecentHistory
                 ? "bg-slate-950 p-4 rounded border border-cyan-900 hover:border-cyan-500 transition-all opacity-90 hover:opacity-100 cursor-pointer"
                 : "bg-slate-900 p-4 rounded border border-slate-700 hover:border-slate-500 transition-all opacity-80 hover:opacity-100 cursor-pointer";
 
-            if (!isTodayHistory) {
+            if (!isRecentHistory) {
                 historyCard.dataset.historyCard = 'other';
                 historyCard.dataset.searchText = buildHistorySearchText(eventData);
                 historyCard.dataset.eventDate = getDateKey(eventData.created_at);
@@ -709,12 +729,12 @@
             totalHistoryCount++;
             document.getElementById('history-count').textContent = totalHistoryCount;
 
-            if (isTodayHistory) {
-                const emptyState = document.getElementById('today-history-empty');
+            if (isRecentHistory) {
+                const emptyState = document.getElementById('recent-history-empty');
                 if (emptyState) emptyState.remove();
 
-                todayHistoryCount++;
-                document.getElementById('today-history-count').textContent = todayHistoryCount;
+                recentHistoryCount++;
+                document.getElementById('recent-history-count').textContent = recentHistoryCount;
             } else {
                 const activeKeyword = sanitizeSearchKeyword(document.getElementById('history-search-input')?.value || '');
                 const activeDate = sanitizeDateFilter(document.getElementById('history-date-input')?.value || '');
