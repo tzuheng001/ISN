@@ -157,12 +157,12 @@
         <!-- 滿版歷史快訊彈出層 (預設隱藏) -->
         <div id="history-modal" class="absolute inset-0 bg-black/90 z-[1000] hidden flex-col transition-opacity">
             <div class="p-4 bg-slate-900 border-b border-cyan-800 flex justify-between items-center shrink-0">
-                <h2 class="text-xl font-bold text-cyan-400 tech-font">📂 歷史快訊歸檔 (Historical Archive)</h2>
+                <h2 class="text-xl font-bold text-cyan-400 tech-font">📂 歷史快訊歸檔 <span class="hidden sm:inline">(Historical Archive)</span></h2>
                 <button onclick="toggleHistory(false)" class="text-gray-400 hover:text-white text-3xl font-bold px-2">&times;</button>
             </div>
-            <div class="flex-1 overflow-hidden bg-slate-950 p-4 md:p-6">
-                <div class="flex h-full flex-col gap-4 lg:flex-row">
-                    <section class="flex min-h-[220px] flex-col overflow-hidden border border-cyan-900/70 bg-slate-900/70 lg:w-[340px] lg:shrink-0">
+            <div class="flex-1 overflow-y-auto bg-slate-950 p-4 md:p-6 lg:overflow-hidden">
+                <div class="flex min-h-full flex-col gap-4 lg:h-full lg:flex-row">
+                    <section class="flex max-h-[40vh] min-h-[180px] shrink-0 flex-col overflow-hidden border border-cyan-900/70 bg-slate-900/70 lg:max-h-none lg:min-h-0 lg:w-[340px]">
                         <div class="shrink-0 border-b border-cyan-900/70 bg-slate-900 p-3">
                             <div class="flex items-center justify-between gap-3">
                                 <h3 class="text-sm font-bold text-cyan-300">24小時內歷史快訊</h3>
@@ -174,7 +174,7 @@
                         </div>
                     </section>
 
-                    <section class="flex min-h-0 flex-1 flex-col overflow-hidden">
+                    <section class="flex min-h-[360px] flex-1 flex-col overflow-hidden lg:min-h-0">
                         <div class="shrink-0 border-b border-slate-800 pb-3">
                             <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                                 <div class="flex items-center gap-3">
