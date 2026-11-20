@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>資安快訊 Cyber Alerts | 即時威脅觀測站</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.0.20/leaflet-maplibre-gl.js"></script>
+    <!-- 預留 Supabase SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Noto+Sans+TC:wght@400;700&display=swap');
+        
+        body {
+            font-family: 'Noto Sans TC', sans-serif;
+            background-color: #050b14;
+            color: #e2e8f0;
+            overflow: hidden;
+        }
+        
+        .tech-font { font-family: 'Share Tech Mono', monospace; }
+
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #3b82f6; border-radius: 3px; }
+
+        /* 修正 1：移除寫死的高度與 Media Query，改由 Tailwind 統一佈局控制 */
+        #map { height: 100%; width: 100%; z-index: 1; background-color: #050b14;}
+
+        .map-control-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            padding: 6px;
+            background: rgba(15, 23, 42, 0.88);
+            border: 1px solid rgba(34, 211, 238, 0.45);
+            border-radius: 8px;
+            backdrop-filter: blur(8px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+        }
+
+        .map-control-button {
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            background: #0f172a;
+            color: #cffafe;
+            cursor: pointer;
+            font-size: 18px;
+            font-weight: 700;
+            line-height: 1;
+            transition: all 0.15s ease;
+        }
+
+        .map-control-button:hover {
+            background: #1e293b;
+            border-color: #22d3ee;
+            color: #ffffff;
+        }
+
+        .map-control-button:active {
+            transform: scale(0.96);
+        }
+
+        .map-control-button.tw-button {
+            font-size: 12px;
+        }
+
+        #feed-list { 
+            scroll-behavior: smooth; 
+            -webkit-overflow-scrolling: touch; /* 修正 2：提升 iOS 手機滑動的順暢度 */
+        }
+
+        /* 地圖脈衝動畫 */
+        .pulse-icon {
+            --pulse-color: 59, 130, 246;
+            border-radius: 50%;
+            background: rgb(var(--pulse-color));
+            box-shadow: 0 0 0 rgba(var(--pulse-color), 0.7);
+            animation: pulse 1.5s infinite;
+        }
+        .pulse-icon.severity-high { --pulse-color: 239, 68, 68; }
+        .pulse-icon.severity-medium { --pulse-color: 234, 179, 8; animation-delay: 0.2s; }
+        .pulse-icon.severity-normal { --pulse-color: 59, 130, 246; animation-delay: 0.4s; }
+
+        @keyframes pulse {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(var(--pulse-color), 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 15px rgba(var(--pulse-color), 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(var(--pulse-color), 0); }
+        }
+
+        /* 跑馬燈 */
+        .ticker-wrapper { overflow: hidden; white-space: nowrap; }
+        .ticker-content { display: inline-block; animation: ticker 20s linear infinite; }
+        @keyframes ticker {
+            0% { transform: translateX(100%); }
+            100% { transform: translateX(-100%); }
+        }
+
+        /* 點擊選中狀態 */
+        .active-card {
+            background-color: #334155 !important; 
+            border-color: #22d3ee !important;     
+            box-shadow: 0 0 10px rgba(34, 211, 238, 0.2);
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen h-[100dvh]">
+
+    <!-- 頂部導覽列 -->
+    <header class="bg-slate-900 border-b border-blue-900 p-2 md:p-4 flex justify-between items-center h-[60px] md:h-[70px] shrink-0">
+        <div class="flex items-center gap-2 md:gap-3">
+            <div class="w-2 h-2 md:w-3 md:h-3 bg-red-500 rounded-full animate-pulse shrink-0"></div>
+            <!-- 標題與副標題：手機版字體縮小，並加入 whitespace-nowrap 防換行 -->
+            <h1 class="text-lg md:text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-300 tracking-wider flex items-baseline whitespace-nowrap">
+                資安快訊 
+                <span class="text-[9px] md:text-sm font-normal text-gray-400 tech-font ml-1 md:ml-2">CYBER THREAT MAP</span>
+            </h1>
+        </div>
+        <div class="flex items-center gap-2 md:gap-4 ml-1">
+            <!-- 開啟歷史紀錄按鈕：縮小 padding 與字體，防止被擠壓 -->
+            <button onclick="toggleHistory(true)" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 hover:border-cyan-500 text-cyan-100 px-2 py-1 md:px-3 md:py-1.5 rounded text-[11px] md:text-sm tech-font transition-all flex items-center gap-1 md:gap-2 whitespace-nowrap">
+                📂 歷史快訊 (<span id="history-count">0</span>)
+            </button>
+            <div class="tech-font text-cyan-400 text-sm hidden sm:block" id="clock"></div>
+        </div>
+    </header>
+
+    <!-- 主要內容區 -->
+    <main class="flex flex-col md:flex-row flex-grow w-full overflow-hidden relative">
+        <!-- 世界地圖區 (修正 3：加入手機版 40vh 限制，並優化手機版下方的框線) -->
+        <div class="w-full h-[40vh] md:h-full md:w-2/3 lg:w-3/4 relative border-b md:border-b-0 md:border-r border-blue-900 shrink-0">
+            <div id="map"></div>
+            <div class="absolute top-4 left-4 z-[400] bg-slate-900/80 border border-cyan-800 p-3 rounded backdrop-blur-sm tech-font text-xs pointer-events-none">
+                <p class="text-gray-400">系統狀態: <span class="text-green-400">ONLINE</span></p>
+                <p class="text-gray-400">當前監控節點: <span class="text-cyan-400" id="live-count">0</span> / 20</p>
+            </div>
+        </div>
+
+        <!-- 側邊最新事件區 (修正 4：將原本的 h-full 換成 flex-1 並加入 overflow-hidden 確保內部清單能觸發滾動) -->
+        <div class="w-full flex-1 md:w-1/3 lg:w-1/4 bg-slate-900 flex flex-col overflow-hidden">
+            <div class="p-3 border-b border-slate-700 bg-slate-800 flex justify-between items-center shrink-0">
+                <h2 class="text-sm font-bold text-gray-200">🔴 最新事件 (LIVE)</h2>
+            </div>
+            <div id="feed-list" class="flex-1 overflow-y-auto p-2 space-y-2 relative">
+                <div class="text-center text-gray-500 text-sm mt-10 tech-font" id="loading-msg">系統初始化中...等待訊號</div>
+            </div>
+        </div>
+
+        <!-- 滿版歷史快訊彈出層 (預設隱藏) -->
+        <div id="history-modal" class="absolute inset-0 bg-black/90 z-[1000] hidden flex-col transition-opacity">
+            <div class="p-4 bg-slate-900 border-b border-cyan-800 flex justify-between items-center shrink-0">
+                <h2 class="text-xl font-bold text-cyan-400 tech-font">📂 歷史快訊歸檔 <span class="hidden sm:inline">(Historical Archive)</span></h2>
+                <button onclick="toggleHistory(false)" class="text-gray-400 hover:text-white text-3xl font-bold px-2">&times;</button>
+            </div>
+            <div class="flex-1 overflow-y-auto bg-slate-950 p-4 md:p-6 lg:overflow-hidden">
+                <div class="flex min-h-full flex-col gap-4 lg:h-full lg:flex-row">
+                    <section class="flex max-h-[40vh] min-h-[180px] shrink-0 flex-col overflow-hidden border border-cyan-900/70 bg-slate-900/70 lg:max-h-none lg:min-h-0 lg:w-[340px]">
+                        <div class="shrink-0 border-b border-cyan-900/70 bg-slate-900 p-3">
+                            <div class="flex items-center justify-between gap-3">
+                                <h3 class="text-sm font-bold text-cyan-300">24小時內歷史快訊</h3>
+                                <span class="tech-font text-xs text-cyan-500" id="recent-history-count">0</span>
+                            </div>
+                        </div>
+                        <div id="recent-history-list" class="flex-1 space-y-3 overflow-y-auto p-3">
+                            <div class="text-center text-xs text-gray-500 tech-font" id="recent-history-empty">24小時內暫無歷史快訊</div>
+                        </div>
+                    </section>
+
+                    <section class="flex min-h-[360px] flex-1 flex-col overflow-hidden lg:min-h-0">
+                        <div class="shrink-0 border-b border-slate-800 pb-3">
+                            <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                                <div class="flex items-center gap-3">
+                                    <h3 class="text-sm font-bold text-gray-200">其他歷史快訊</h3>
+                                    <span class="tech-font text-xs text-slate-500" id="other-history-count">0</span>
+                                </div>
+                                <div class="flex w-full flex-col gap-2 sm:flex-row xl:w-auto">
+                                    <input
+                                        id="history-search-input"
+                                        type="search"
+                                        maxlength="80"
+                                        autocomplete="off"
+                                        class="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition-all placeholder:text-slate-600 focus:border-cyan-500 xl:w-72"
+                                        placeholder="關鍵字查詢"
+                                    >
+                                    <input
+                                        id="history-date-input"
+                                        type="date"
+                                        class="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none transition-all focus:border-cyan-500 sm:w-44"
+                                        aria-label="日期查詢"
+                                    >
+                                </div>
+                            </div>
+                        </div>
+                        <div id="history-list" class="grid flex-1 grid-cols-1 gap-4 overflow-y-auto pt-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 content-start">
+                            <!-- 歷史卡片會被移到這裡 -->
+                            <div class="col-span-full hidden text-center text-xs text-gray-500 tech-font" id="history-search-empty">找不到符合條件的其他歷史快訊</div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 跑馬燈 -->
+    <footer class="bg-red-950/80 border-t border-red-900 text-red-200 h-[30px] flex items-center shrink-0 tech-font text-xs ticker-wrapper">
+        <div class="ticker-content" id="ticker-text">
+            [系統提示] 準備連線至全球資安觀測站... 
+        </div>
+    </footer>
+
+    <!-- 事件細節彈窗 -->
+    <div id="detail-modal" class="fixed inset-0 z-[1200] hidden items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/75 backdrop-blur-sm" onclick="toggleDetailModal(false)"></div>
+        <div class="relative w-full max-w-2xl max-h-[85vh] overflow-y-auto rounded border border-cyan-800 bg-slate-950 shadow-2xl">
+            <div class="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-cyan-900 bg-slate-900 p-4">
+                <div>
+                    <p class="tech-font text-xs text-cyan-400">EVENT DETAIL</p>
+                    <h2 id="detail-title" class="mt-1 text-lg font-bold text-blue-100">事件細節</h2>
+                </div>
+                <button onclick="toggleDetailModal(false)" class="text-3xl font-bold leading-none text-gray-400 hover:text-white" aria-label="關閉細節">&times;</button>
+            </div>
+
+            <div class="p-5">
+                <div id="detail-status" class="rounded border border-cyan-900 bg-slate-950 p-3 text-sm text-cyan-200">
+                    正在讀取事件細節...
+                </div>
+
+                <div id="detail-content" class="hidden space-y-4">
+                    <section id="detail-url-row">
+                        <h3 class="mb-1 text-xs font-bold text-cyan-400 tech-font">網址</h3>
+                        <a id="detail-url" class="break-all text-sm text-blue-300 underline decoration-blue-500/60 underline-offset-4 hover:text-blue-100" href="#" target="_blank" rel="noopener noreferrer"></a>
+                    </section>
+
+                    <section>
+                        <h3 class="mb-1 text-xs font-bold text-cyan-400 tech-font">內容摘要</h3>
+                        <p id="detail-summary" class="whitespace-pre-wrap text-sm leading-6 text-slate-200"></p>
+                    </section>
+
+                    <section>
+                        <h3 class="mb-1 text-xs font-bold text-cyan-400 tech-font">建議處置</h3>
+                        <p id="detail-suggestion" class="whitespace-pre-wrap text-sm leading-6 text-slate-200"></p>
+                    </section>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. 歷史視窗切換邏輯 ---
+        function toggleHistory(show) {
+            const modal = document.getElementById('history-modal');
+            if (show) {
+                modal.classList.remove('hidden');
+                modal.classList.add('flex');
+            } else {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+            }
+        }
+
+        function toggleDetailModal(show) {
+            const modal = document.getElementById('detail-modal');
+            if (show) {
+                modal.classList.remove('hidden');
+                modal.classList.add('flex');
+            } else {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+            }
+        }
+
+        function getOptionalText(value) {
+            if (value === null || value === undefined) return '';
+            return String(value).trim();
+        }
+
+        function normalizeUrl(url) {
+            const cleanUrl = getOptionalText(url);
+            if (!cleanUrl) return '';
+            return /^https?:\/\//i.test(cleanUrl) ? cleanUrl : `https://${cleanUrl}`;
+        }
+
+        function setDetailStatus(message, isError = false) {
+            const status = document.getElementById('detail-status');
+            const content = document.getElementById('detail-content');
+            status.className = isError
+                ? 'rounded border border-red-800 bg-red-950/40 p-3 text-sm text-red-200'
+                : 'rounded border border-cyan-900 bg-slate-950 p-3 text-sm text-cyan-200';
+            status.textContent = message;
+            status.classList.remove('hidden');
+            content.classList.add('hidden');
+        }
+
+        function renderDetailContent(detailData) {
+            const status = document.getElementById('detail-status');
+            const content = document.getElementById('detail-content');
+            const urlRow = document.getElementById('detail-url-row');
+            const urlLink = document.getElementById('detail-url');
+            const rawUrl = getOptionalText(detailData.url);
+            const finalUrl = normalizeUrl(rawUrl);
+
+            if (rawUrl) {
+                urlRow.classList.remove('hidden');
+                urlLink.href = finalUrl;
+                urlLink.textContent = rawUrl;
+            } else {
+                urlRow.classList.add('hidden');
+                urlLink.removeAttribute('href');
+                urlLink.textContent = '';
+            }
+
+            document.getElementById('detail-summary').textContent = getOptionalText(detailData.summary) || '未提供內容摘要';
+            document.getElementById('detail-suggestion').textContent = getOptionalText(detailData.suggestion) || '未提供建議處置';
+
+            status.classList.add('hidden');
+            content.classList.remove('hidden');
+        }
+
+        async function openEventDetails(eventData) {
+            const eventId = eventData.id;
+            document.getElementById('detail-title').textContent = eventData.title || '事件細節';
+            setDetailStatus('正在讀取事件細節...');
+            toggleDetailModal(true);
+
+            if (eventId === null || eventId === undefined || eventId === '') {
+                setDetailStatus('這筆事件缺少 id，無法回資料庫查詢細節。', true);
+                return;
+            }
+
+            const { data, error } = await supabaseClient
+                .from(TABLE_NAME)
+                .select('url, summary, suggestion')
+                .eq('id', eventId)
+                .single();
+
+            if (error) {
+                console.error('事件細節讀取失敗:', error);
+                setDetailStatus('細節讀取失敗，請確認 Supabase 欄位 url、summary、suggestion 與 RLS 權限設定。', true);
+                return;
+            }
+
+            renderDetailContent(data || {});
+        }
+
+        function attachDetailButton(card, eventData) {
+            const detailButton = card.querySelector('.detail-button');
+            if (!detailButton) return;
+
+            detailButton.addEventListener('click', (event) => {
+                event.stopPropagation();
+                openEventDetails(eventData);
+            });
+        }
+
+        // --- 2. 時鐘與地圖初始化 ---
+        const TAIWAN_TIME_ZONE = 'Asia/Taipei';
+
+        function updateClock() {
+            const now = new Date();
+            const taiwanDate = new Intl.DateTimeFormat('zh-TW', {
+                timeZone: TAIWAN_TIME_ZONE,
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit'
+            }).format(now);
+            const taiwanTime = new Intl.DateTimeFormat('zh-TW', {
+                timeZone: TAIWAN_TIME_ZONE,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+            }).format(now);
+
+            document.getElementById('clock').textContent = `臺灣時間 ${taiwanDate} ${taiwanTime}`;
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        const map = L.map('map', {
+            center: [23.5, 121], 
+            zoom: 3,
+            minZoom: 2,
+            maxBounds: [[-90, -180], [90, 180]],
+            zoomControl: false
+        });
+
+        // OpenFreeMap 採向量圖磚，透過 MapLibre GL Leaflet 橋接以保留原有 Leaflet 標記及控制功能。
+        L.maplibreGL({
+            style: 'https://tiles.openfreemap.org/styles/dark',
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        const TAIWAN_CENTER = [23.6978, 120.9605];
+        const TAIWAN_ZOOM = 7;
+
+        function addMapControlButton(container, label, title, onClick, extraClass = '') {
+            const button = L.DomUtil.create('button', `map-control-button ${extraClass}`, container);
+            button.type = 'button';
+            button.textContent = label;
+            button.title = title;
+            button.setAttribute('aria-label', title);
+
+            L.DomEvent.on(button, 'click', (event) => {
+                L.DomEvent.stop(event);
+                onClick();
+            });
+
+            return button;
+        }
+
+        const mapQuickControl = L.control({ position: 'bottomright' });
+        mapQuickControl.onAdd = function () {
+            const container = L.DomUtil.create('div', 'leaflet-control map-control-panel');
+            L.DomEvent.disableClickPropagation(container);
+            L.DomEvent.disableScrollPropagation(container);
+
+            addMapControlButton(container, '+', '放大', () => map.zoomIn());
+            addMapControlButton(container, '-', '縮小', () => map.zoomOut());
+            addMapControlButton(container, '台灣', '回到台灣', () => {
+                map.flyTo(TAIWAN_CENTER, TAIWAN_ZOOM, { duration: 1.2 });
+            }, 'tw-button');
+
+            return container;
+        };
+        mapQuickControl.addTo(map);
+
+        // --- 3. 狀態與佇列管理 ---
+        let eventQueue = []; // 用於存放畫面上的活動節點 (上限 20)
+        let totalHistoryCount = 0;
+        let recentHistoryCount = 0;
+        let otherHistoryCount = 0;
+        const MAX_LIVE_EVENTS = 20;
+        const MAX_SEARCH_KEYWORD_LENGTH = 80;
+        const RECENT_HISTORY_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+        function clearAllHighlights() {
+            document.querySelectorAll('.active-card').forEach(el => {
+                el.classList.remove('active-card');
+            });
+        }
+
+        // --- 🎈 新增：處理手機版地圖偏移的共用函數 ---
+        function flyToEvent(lat, lng) {
+            let targetZoom = 5;
+            let targetLatLng = L.latLng(lat, lng);
+
+            // 檢查是否為手機版 (螢幕寬度小於 768px)
+            if (window.innerWidth < 768) {
+                // 先將目標經緯度轉成畫面上的像素座標
+                let point = map.project(targetLatLng, targetZoom);
+                
+                // 💡 偏移調整區：
+                // 地圖「相機焦點」往左上角移動 (減法) -> 畫面上的標記與訊息框就會「往右下方偏移」
+                point.x -= 50; // 負值代表標記往右移 (避開左側)
+                point.y -= 90; // 負值代表標記往下移 (避開左上方狀態框)
+                
+                // 將調整後的像素轉回經緯度
+                targetLatLng = map.unproject(point, targetZoom);
+            }
+
+            // 執行飛行動畫
+            map.flyTo(targetLatLng, targetZoom, { duration: 1.5 });
+        }
+
+
+        // --- 4. 處理與渲染新事件 (含連動與歷史歸檔) ---
+        function escapeHTML(value) {
+            const text = getOptionalText(value);
+            const escapeMap = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            };
+
+            return text.replace(/[&<>"']/g, char => escapeMap[char]);
+        }
+
+        function normalizeSearchText(value) {
+            const text = getOptionalText(value);
+            const normalized = typeof text.normalize === 'function' ? text.normalize('NFKC') : text;
+            return normalized.toLocaleLowerCase('zh-TW');
+        }
+
+        function sanitizeSearchKeyword(value) {
+            return normalizeSearchText(value).slice(0, MAX_SEARCH_KEYWORD_LENGTH);
+        }
+
+        function getDateKey(value) {
+            const date = value ? new Date(value) : new Date();
+            if (Number.isNaN(date.getTime())) return '';
+
+            const dateParts = new Intl.DateTimeFormat('en-US', {
+                timeZone: TAIWAN_TIME_ZONE,
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit'
+            }).formatToParts(date);
+            const partMap = Object.fromEntries(dateParts.map(part => [part.type, part.value]));
+            return `${partMap.year}-${partMap.month}-${partMap.day}`;
+        }
+
+        function sanitizeDateFilter(value) {
+            const dateText = getOptionalText(value);
+            return /^\d{4}-\d{2}-\d{2}$/.test(dateText) ? dateText : '';
+        }
+
+        function buildHistorySearchText(eventData) {
+            return normalizeSearchText([
+                eventData.threat_type,
+                eventData.title,
+                eventData.location,
+                eventData.severity,
+                eventData.created_at,
+                eventData.url,
+                eventData.summary,
+                eventData.suggestion
+            ].map(value => getOptionalText(value)).join(' '));
+        }
+
+        function updateOtherHistoryCountLabel(visibleCount = otherHistoryCount) {
+            const label = document.getElementById('other-history-count');
+            const keyword = sanitizeSearchKeyword(document.getElementById('history-search-input')?.value || '');
+            const dateFilter = sanitizeDateFilter(document.getElementById('history-date-input')?.value || '');
+            const hasActiveFilter = Boolean(keyword || dateFilter);
+            label.textContent = hasActiveFilter ? `${visibleCount} / ${otherHistoryCount}` : otherHistoryCount;
+        }
+
+        function filterOtherHistoryEvents() {
+            const keyword = sanitizeSearchKeyword(document.getElementById('history-search-input')?.value || '');
+            const dateFilter = sanitizeDateFilter(document.getElementById('history-date-input')?.value || '');
+            const cards = document.querySelectorAll('#history-list [data-history-card="other"]');
+            let visibleCount = 0;
+
+            cards.forEach(card => {
+                const matchedKeyword = !keyword || card.dataset.searchText.includes(keyword);
+                const matchedDate = !dateFilter || card.dataset.eventDate === dateFilter;
+                const matched = matchedKeyword && matchedDate;
+                card.style.display = matched ? '' : 'none';
+                if (matched) visibleCount++;
+            });
+
+            const emptyState = document.getElementById('history-search-empty');
+            if (emptyState) {
+                emptyState.classList.toggle('hidden', visibleCount > 0 || (!keyword && !dateFilter));
+            }
+
+            updateOtherHistoryCountLabel(visibleCount);
+        }
+
+        function initializeHistorySearch() {
+            const keywordInput = document.getElementById('history-search-input');
+            const dateInput = document.getElementById('history-date-input');
+
+            if (keywordInput) keywordInput.addEventListener('input', filterOtherHistoryEvents);
+            if (dateInput) dateInput.addEventListener('input', filterOtherHistoryEvents);
+        }
+
+        function getSeverityConfig(severity) {
+            const level = String(severity || 'Normal').trim().toLowerCase();
+
+            if (level === 'high') {
+                return {
+                    markerClass: 'severity-high',
+                    badgeClass: 'bg-red-900 text-red-300',
+                    popupColor: '#ef4444'
+                };
+            }
+
+            if (level === 'medium') {
+                return {
+                    markerClass: 'severity-medium',
+                    badgeClass: 'bg-yellow-900 text-yellow-300',
+                    popupColor: '#eab308'
+                };
+            }
+
+            return {
+                markerClass: 'severity-normal',
+                badgeClass: 'bg-blue-900 text-blue-300',
+                popupColor: '#3b82f6'
+            };
+        }
+
+        function createPulseIcon(severity) {
+            const severityConfig = getSeverityConfig(severity);
+            return L.divIcon({
+                className: `pulse-icon ${severityConfig.markerClass}`,
+                iconSize: [12, 12]
+            });
+        }
+
+        function bindEventPopup(marker, eventData) {
+            const severityConfig = getSeverityConfig(eventData.severity);
+            marker.bindPopup(`
+                <strong style="color: ${severityConfig.popupColor};">${escapeHTML(eventData.threat_type)}</strong><br>
+                ${escapeHTML(eventData.title)}<br>
+                <span style="color:#aaa; font-size:12px;">地點: ${escapeHTML(eventData.location)}</span>
+            `, {
+                autoPanPaddingTopLeft: [10, 100]
+            });
+        }
+
+        function showTemporaryHistoryMarker(eventData) {
+            const lat = Number(eventData.lat);
+            const lng = Number(eventData.lng);
+
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+                console.warn('歷史事件缺少有效經緯度，無法建立臨時標記:', eventData);
+                return;
+            }
+
+            const marker = L.marker([lat, lng], {
+                icon: createPulseIcon(eventData.severity),
+                zIndexOffset: 1000
+            }).addTo(map);
+
+            bindEventPopup(marker, eventData);
+            marker.openPopup();
+
+            setTimeout(() => {
+                if (map.hasLayer(marker)) {
+                    map.removeLayer(marker);
+                }
+            }, 10000);
+        }
+
+        function formatEventDateTime(value) {
+            const date = value ? new Date(value) : new Date();
+            if (Number.isNaN(date.getTime())) return '--/-- --:--';
+
+            const formattedDate = date.toLocaleDateString('zh-TW', {
+                timeZone: TAIWAN_TIME_ZONE,
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit'
+            });
+            const formattedTime = date.toLocaleTimeString('zh-TW', {
+                timeZone: TAIWAN_TIME_ZONE,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+            });
+
+            return `${formattedDate}<br>${formattedTime}`;
+        }
+
+        function buildEventCardHTML(eventData) {
+            const lat = Number(eventData.lat);
+            const severityConfig = getSeverityConfig(eventData.severity);
+            const displayTime = formatEventDateTime(eventData.created_at);
+            const displayLat = Number.isFinite(lat) ? lat.toFixed(2) : '--';
+
+            return `
+                <div class="flex justify-between items-start mb-1 pointer-events-none">
+                    <span class="text-xs font-bold px-2 py-0.5 rounded tech-font ${severityConfig.badgeClass}">
+                        ${escapeHTML(eventData.threat_type)}
+                    </span>
+                    <span class="ml-2 whitespace-nowrap text-right text-[10px] leading-tight text-gray-400 tech-font">${displayTime}</span>
+                </div>
+                <div class="text-sm font-semibold text-blue-200 pointer-events-none block line-clamp-2 mb-1">
+                    ${escapeHTML(eventData.title)}
+                </div>
+                <p class="text-xs text-gray-400 pointer-events-none flex justify-between">
+                    <span>${escapeHTML(eventData.location)}</span>
+                    <span class="text-[9px] text-cyan-800">LAT: ${displayLat}</span>
+                </p>
+                <div class="mt-2 flex justify-end">
+                    <button type="button" class="detail-button rounded border border-cyan-900 bg-slate-900 px-2 py-1 text-[11px] font-bold text-cyan-200 transition-all hover:border-cyan-400 hover:bg-slate-700 hover:text-white">
+                        細節
+                    </button>
+                </div>
+            `;
+        }
+
+        function isRecentHistoryEvent(createdAt) {
+            if (!createdAt) return false;
+
+            const eventDate = new Date(createdAt);
+            if (Number.isNaN(eventDate.getTime())) return false;
+
+            const now = new Date();
+            const elapsed = now.getTime() - eventDate.getTime();
+            return elapsed >= 0 && elapsed <= RECENT_HISTORY_WINDOW_MS;
+        }
+
+        function renderHistoryEvent(eventData, insertMode = 'append') {
+            const isRecentHistory = isRecentHistoryEvent(eventData.created_at);
+            const historyList = document.getElementById(isRecentHistory ? 'recent-history-list' : 'history-list');
+            const historyCard = document.createElement('div');
+            const lat = eventData.lat;
+            const lng = eventData.lng;
+
+            historyCard.className = isRecentHistory
+                ? "bg-slate-950 p-4 rounded border border-cyan-900 hover:border-cyan-500 transition-all opacity-90 hover:opacity-100 cursor-pointer"
+                : "bg-slate-900 p-4 rounded border border-slate-700 hover:border-slate-500 transition-all opacity-80 hover:opacity-100 cursor-pointer";
+
+            if (!isRecentHistory) {
+                historyCard.dataset.historyCard = 'other';
+                historyCard.dataset.searchText = buildHistorySearchText(eventData);
+                historyCard.dataset.eventDate = getDateKey(eventData.created_at);
+            }
+
+            historyCard.innerHTML = buildEventCardHTML(eventData);
+            attachDetailButton(historyCard, eventData);
+
+            historyCard.addEventListener('click', () => {
+                toggleHistory(false);
+                flyToEvent(lat, lng);
+                showTemporaryHistoryMarker(eventData);
+            });
+
+            if (insertMode === 'prepend') {
+                historyList.prepend(historyCard);
+            } else {
+                historyList.appendChild(historyCard);
+            }
+
+            totalHistoryCount++;
+            document.getElementById('history-count').textContent = totalHistoryCount;
+
+            if (isRecentHistory) {
+                const emptyState = document.getElementById('recent-history-empty');
+                if (emptyState) emptyState.remove();
+
+                recentHistoryCount++;
+                document.getElementById('recent-history-count').textContent = recentHistoryCount;
+            } else {
+                const activeKeyword = sanitizeSearchKeyword(document.getElementById('history-search-input')?.value || '');
+                const activeDate = sanitizeDateFilter(document.getElementById('history-date-input')?.value || '');
+                otherHistoryCount++;
+
+                const matchedKeyword = !activeKeyword || historyCard.dataset.searchText.includes(activeKeyword);
+                const matchedDate = !activeDate || historyCard.dataset.eventDate === activeDate;
+
+                if (!matchedKeyword || !matchedDate) {
+                    historyCard.style.display = 'none';
+                }
+
+                if (activeKeyword || activeDate) {
+                    filterOtherHistoryEvents();
+                } else {
+                    updateOtherHistoryCountLabel();
+                }
+            }
+        }
+
+        function renderNewEvent(eventData) {
+            const eventId = eventData.id || `evt_${Date.now()}`;
+            const lat = eventData.lat; 
+            const lng = eventData.lng;
+
+            // A. 建立地圖標記
+            const pulseIcon = createPulseIcon(eventData.severity);
+            const marker = L.marker([lat, lng], { icon: pulseIcon }).addTo(map);
+            
+            // 💡 加入 autoPanPaddingTopLeft，防止地圖打開訊息框時又自動把它拉回死角
+            bindEventPopup(marker, eventData);
+
+            // B. 建立側邊列表卡片
+            const feedList = document.getElementById('feed-list');
+            if (document.getElementById('loading-msg')) {
+                document.getElementById('loading-msg').remove();
+            }
+
+            const card = document.createElement('div');
+            card.id = `card-${eventId}`;
+            card.className = "bg-slate-800 p-3 rounded border border-slate-700 hover:border-cyan-500 transition-all cursor-pointer transform translate-x-4 opacity-0 shrink-0";
+            
+            // 建立卡片內容 (抽離成共用函式，最新事件與歷史快訊共用)
+            const cardInnerHTML = buildEventCardHTML(eventData);
+            card.innerHTML = cardInnerHTML;
+            attachDetailButton(card, eventData);
+            feedList.insertBefore(card, feedList.firstChild);
+            setTimeout(() => card.classList.remove('translate-x-4', 'opacity-0'), 50);
+
+            // C. 雙向連動 (點卡片飛去地圖，點地圖找卡片)
+            card.addEventListener('click', () => {
+                clearAllHighlights();
+                card.classList.add('active-card');
+                
+                // 💡 使用新的偏移函數取代原本的 map.flyTo
+                flyToEvent(lat, lng); 
+                
+                setTimeout(() => { marker.openPopup(); }, 1500);
+            });
+
+            marker.on('click', () => {
+                clearAllHighlights();
+                card.classList.add('active-card');
+                card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                
+                // 💡 點擊地圖上的點時，也可以順便套用偏移函數讓它移到最佳觀看位置
+                flyToEvent(lat, lng);
+            });
+
+            // D. 數量控制與「歷史歸檔」機制
+            eventQueue.push({ id: eventId, marker: marker, card: card, lat: lat, lng: lng, innerHTML: cardInnerHTML, eventData: eventData });
+            document.getElementById('live-count').textContent = eventQueue.length;
+
+            // 當超過上限時，將最舊的一筆移到「歷史區」
+            if (eventQueue.length > MAX_LIVE_EVENTS) {
+                const oldestEvent = eventQueue.shift();
+                
+                // 1. 從地圖上移除標記 (保持效能)
+                map.removeLayer(oldestEvent.marker);
+                
+                // 2. 從側邊欄移除
+                if (oldestEvent.card.parentNode) oldestEvent.card.remove(); 
+                
+                // 3. 建立新的歷史卡片並放到歷史區最前面
+                renderHistoryEvent(oldestEvent.eventData, 'prepend');
+                document.getElementById('live-count').textContent = eventQueue.length;
+            }
+
+            // 更新跑馬燈
+            document.getElementById('ticker-text').textContent = 
+                `[最新警報] ${getOptionalText(eventData.location)} 發生 ${getOptionalText(eventData.threat_type)}：${getOptionalText(eventData.title)} - 正在持續追蹤中...`;
+        }
+
+        // ==========================================
+        // 🚀 SUPABASE 正式資料庫串接區
+        // ==========================================
+
+        // 1. 填入你的 Supabase 專案網址與匿名公開金鑰 (Anon Public Key)
+        const SUPABASE_URL = 'https://ijowavpputrbsamwtrwh.supabase.co';
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlqb3dhdnBwdXRyYnNhbXd0cndoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzNjY4MjIsImV4cCI6MjA5NDk0MjgyMn0.DKSgSMRJE9mVkwiFPZ-DJ0VLF-Q8EBZx7Abs1juHssY';
+        const TABLE_NAME = 'News'; // 你的資料表名稱
+        const INITIAL_FETCH_PAGE_SIZE = 1000;
+
+        // 建立 Supabase 連線客戶端
+        const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        async function fetchAllInitialRows() {
+                let allRows = [];
+                let from = 0;
+
+                while (true) {
+                    const to = from + INITIAL_FETCH_PAGE_SIZE - 1;
+                    const { data, error } = await supabaseClient
+                        .from(TABLE_NAME)
+                        .select('*')
+                        .order('created_at', { ascending: false })
+                        .range(from, to);
+
+                    if (error) {
+                        return { data: null, error };
+                    }
+
+                    if (data && data.length > 0) {
+                        allRows = allRows.concat(data);
+                    }
+
+                    if (!data || data.length < INITIAL_FETCH_PAGE_SIZE) {
+                        break;
+                    }
+
+                    from += INITIAL_FETCH_PAGE_SIZE;
+                }
+
+                return { data: allRows, error: null };
+        }
+
+        // 2. 初始化：最新 20 筆放到即時區，其餘依時間順序放到歷史快訊
+        async function fetchInitialData() {
+                document.getElementById('loading-msg').textContent = '📡 正在連線至資料庫並載入歷史資料...';
+        
+                const { data, error } = await fetchAllInitialRows();
+
+                if (error) {
+                    console.error('資料讀取失敗:', error);
+                    document.getElementById('loading-msg').textContent = '❌ 資料庫連線失敗';
+                    return;
+                }
+
+                if (data && data.length > 0) {
+                    const liveEvents = data.slice(0, MAX_LIVE_EVENTS);
+                    const historyEvents = data.slice(MAX_LIVE_EVENTS);
+
+                    // 最新事件仍維持最新在最上方；反轉渲染可保留原本進場與佇列順序
+                    liveEvents.slice().reverse().forEach(eventData => {
+                            renderNewEvent(eventData);
+                    });
+
+                    // 歷史快訊由較新到較舊依序排列
+                    historyEvents.forEach(eventData => {
+                            renderHistoryEvent(eventData, 'append');
+                    });
+                } else {
+                    document.getElementById('loading-msg').textContent = '✅ 連線成功，等待新事件發生...';
+                }
+        }
+
+        // 3. 監聽即時更新 (Realtime WebSockets)
+        function subscribeToNewAlerts() {
+                supabaseClient
+                    .channel('public-alerts')
+                    .on(
+                            'postgres_changes',
+                            { 
+                                event: 'INSERT',       // 只監聽「新增」事件
+                                schema: 'public', 
+                                table: TABLE_NAME 
+                            },
+                            (payload) => {
+                                console.log('🚨 收到新警報！', payload.new);
+                                // payload.new 就是剛存進資料庫的那一筆最新資料
+                                renderNewEvent(payload.new);
+                            }
+                    )
+                    .subscribe((status) => {
+                            if (status === 'SUBSCRIBED') {
+                                console.log('✅ 即時監控頻道連線成功');
+                            }
+                    });
+        }
+
+        // 4. 啟動程序
+        initializeHistorySearch();
+        fetchInitialData().then(() => {
+                subscribeToNewAlerts();
+        });
+        
+    </script>
+</body>
+</html>
